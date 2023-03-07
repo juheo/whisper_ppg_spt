@@ -162,9 +162,10 @@ class AudioEncoder(nn.Module):
         x = F.gelu(self.conv1(x))
         x = F.gelu(self.conv2(x))
         x = x.permute(0, 2, 1)
-
-        assert x.shape[1:] == self.positional_embedding.shape, "incorrect audio shape"
-        x = (x + self.positional_embedding).to(x.dtype)
+        B, T, C = x.shape
+        # assert x.shape[1:] == self.positional_embedding.shape, "incorrect audio shape"
+        assert T <= self.positional_embedding.shape[0], "audio too long"
+        x = (x + self.positional_embedding[:,:T,:]).to(x.dtype)
 
         for block in self.blocks:
             x = block(x)
