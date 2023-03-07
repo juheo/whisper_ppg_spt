@@ -68,7 +68,7 @@ def log_mel_spectrogram(segs, filters):
     B, T, _ = segs.shape
     segs = segs.view(-1, segs.shape[-1])
     window = torch.hann_window(N_FFT).to(segs[0].device)
-    stft = torch.stft(segs[:,:-1], N_FFT, HOP_LENGTH, window=window, return_complex=True).squeeze(-1)
+    stft = torch.stft(segs[:,:], N_FFT, HOP_LENGTH, window=window, return_complex=True, center=False).squeeze(-1)
     # stft [B*T, n_fft] -> [B, T, n_fft]
     stft = stft.view(B, T, stft.shape[-1])
     stft = stft.permute(0,2,1)
