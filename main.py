@@ -2,7 +2,7 @@ import torch
 import librosa 
 import julius 
 
-from whisper.model import Whisper, ModelDimensions
+from whisper.model import Whisper, ModelDimensions, AudioEncoder
 from utils import center, get_segments, log_mel_spectrogram, mel_filters
 
 import matplotlib 
@@ -18,12 +18,39 @@ def load_model(path) -> Whisper:
     model.load_state_dict(checkpoint["model_state_dict"])
     return model.to(device)
 
+# ckpt_file = "/nas/public/model/whisper/large-v2.pt"
+# checkpoint = torch.load(ckpt_file, map_location='cpu')
+# dims = ModelDimensions(**checkpoint["dims"])
 
-whisper = load_model("/nas/public/model/whisper/large-v2.pt")
-device = whisper.device
-filters = mel_filters(whisper.device, 80)
+# whisper_encoder = AudioEncoder(dims.n_mels, dims.n_audio_ctx, dims.n_audio_state, dims.n_audio_head, dims.n_audio_layer)
+# whisper_encoder_ckpt = {'model_state_dict': {}, 'dims': {}}
 
-whisper.eval()
+# for name in whisper_encoder.state_dict().keys():
+
+#     org_name = f'encoder.{name}'
+#     if org_name in checkpoint["model_state_dict"].keys():
+#         whisper_encoder_ckpt['model_state_dict'][name] = checkpoint['model_state_dict'][f'{org_name}']
+#     else:
+#         print(name)
+#         whisper_encoder_ckpt['model_state_dict'][name] = checkpoint['model_state_dict'][f'{name}']    
+
+# whisper_encoder_ckpt['dims'] = checkpoint['dims']
+# torch.save(whisper_encoder_ckpt, "/nas/public/model/whisper/large-v2-encoder.pt")
+
+gpu = 0
+device = f"cuda:{gpu}"
+
+ckpt_file = "/nas/public/model/whisper/large-v2-encoder.pt"
+checkpoint = torch.load(ckpt_file, map_location=device)
+dims = ModelDimensions(**checkpoint["dims"])
+
+whisper_encoder = AudioEncoder(dims.n_mels, dims.n_audio_ctx, dims.n_audio_state, dims.n_audio_head, dims.n_audio_layer)
+whisper_encoder.load_state_dict(checkpoint["model_state_dict"])
+whisper_encoder.to(device)
+whisper_encoder.eval()
+
+filters = mel_filters(device, 80)
+
 
 
 with torch.no_grad():
@@ -36,7 +63,7 @@ with torch.no_grad():
     segs = get_segments(audio_16k, center_point_idx, segment_length=400)
     mel = log_mel_spectrogram(segs, filters)
     # get_ppg
-    ppg = whisper.encoder(mel) # [B, T, 1280]
+    ppg = whisper_encoder(mel) # [B, T, 1280]
     print(ppg.shape)
 
     # plot
@@ -57,6 +84,6 @@ with torch.no_grad():
     segs = get_segments(audio_16k, center_point_idx, segment_length=400)
     mel = log_mel_spectrogram(segs, filters)
     # get_ppg
-    ppg = whisper.encoder(mel) # [B, T, 1280]
+    ppg = whisper_encoder(mel) # [B, T, 1280]
     print(ppg.shape)
 
