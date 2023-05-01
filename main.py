@@ -27,7 +27,7 @@ from utils import center, get_segments, log_mel_spectrogram, mel_filters
 
 
 # set gpu
-gpu = 0
+gpu = 9
 device = f"cuda:{gpu}"
 
 # load model
@@ -57,3 +57,20 @@ mel = log_mel_spectrogram(segs, filters)
 with torch.no_grad():
     ppg = whisper_encoder(mel)
     print(ppg.shape) # [B, T, 1280]
+
+
+audio = torch.randn(1, 2000*512-1).to(device) # wave length should be (N*512-1) -> than ppg length is N
+
+# get mel
+wav_length = audio.shape[1]
+center_point_idx = center(wav_length, win_length=2048, hop_length=256, sr1=44100, sr2=16000)
+audio_16k = julius.resample_frac(audio, 44100, 16000)
+segs = get_segments(audio_16k, center_point_idx, segment_length=400)
+mel = log_mel_spectrogram(segs, filters) 
+
+
+
+# get constrainted results
+with torch.no_grad():
+    x = mel[0]
+    result = whisper_encoder.inference(mel[0])

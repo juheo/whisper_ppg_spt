@@ -161,3 +161,43 @@ class AudioEncoder(nn.Module):
         x = self.ln_post(x)
         return x
 
+
+    def chunk(self, x, max_batch=24):
+        # x [C, T] -> x_chunk [B, C, T//B]
+        chunk_size = self.positional_embedding.shape[0]
+        original_length = x.shape[-1]
+        num_feats = (int)(np.ceil(original_length/chunk_size))
+        pad_length = (num_feats * chunk_size) - original_length
+        x_pad = torch.nn.functional.pad(x, (0, pad_length))
+        x_pad_chunk = [x_pad[:, i*chunk_size:(i+1)*chunk_size] for i in range(num_feats)]
+        x_batch = torch.stack(x_pad_chunk, dim=0)
+        x_list = []
+        for i in range((int)(np.ceil(x_batch.size()[0] / max_batch))):
+            x_list.append(x_batch[i*max_batch:(i+1)*max_batch])
+        expected_feature_length = original_length//2
+        return x_list, expected_feature_length
+
+    def unchunk(self, feat_list, expected_feature_length):
+        # feat_list [[B, T, C]]
+        result = None
+        B, C, _ = feat_list[0].size()
+        for feat in feat_list:
+            for b in range(feat.size()[0]):
+                if result is None:
+                    result = feat[b]
+                else:
+                    result = torch.cat([result, feat[b]], dim=0)
+        return result[:expected_feature_length]
+    
+
+    def inference(self, x):
+        # x: [C, T]
+        # output: [C', T]
+        output_list = []
+        x_list, original_length = self.chunk(x)
+        for x_temp in x_list:
+            output = self.forward(x_temp)
+            output_list.append(output)
+        result = self.unchunk(output_list, original_length)
+        return result 
+
