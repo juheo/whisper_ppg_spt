@@ -161,34 +161,44 @@ class AudioEncoder(nn.Module):
         x = self.ln_post(x)
         return x
 
+    def chunk(self, feat, window_size=1500, hop_size=750, max_batch=4):
+        # feat: [C, T]
+        feat_list = []
+        original_shape = feat.shape[-1]
+        if original_shape <= window_size:
+            return [feat.unsqueeze(0)], original_shape//2
+        else:
+            N = int(np.ceil((original_shape - window_size) / (hop_size))) + 1
+            L = hop_size * (N - 1) + window_size
+            feat_pad = torch.cat(
+                [feat, torch.zeros_like(feat[:, : L - original_shape])], dim=1
+            )
+            feat_pad_chunk = [
+                feat_pad[:, i * hop_size : i * hop_size + window_size] for i in range(N)
+            ]
+            feat_batch = torch.stack(feat_pad_chunk, dim=0)
+            feat_list = []
+            for i in range((int)(np.ceil(feat_batch.size()[0] / max_batch))):
+                feat_list.append(feat_batch[i * max_batch : (i + 1) * max_batch])
+            return feat_list, original_shape//2
 
-    def chunk(self, x, max_batch=24):
-        # x [C, T] -> x_chunk [B, C, T//B]
-        chunk_size = self.positional_embedding.shape[0]
-        original_length = x.shape[-1]
-        num_feats = (int)(np.ceil(original_length/chunk_size))
-        pad_length = (num_feats * chunk_size) - original_length
-        x_pad = torch.nn.functional.pad(x, (0, pad_length))
-        x_pad_chunk = [x_pad[:, i*chunk_size:(i+1)*chunk_size] for i in range(num_feats)]
-        x_batch = torch.stack(x_pad_chunk, dim=0)
-        x_list = []
-        for i in range((int)(np.ceil(x_batch.size()[0] / max_batch))):
-            x_list.append(x_batch[i*max_batch:(i+1)*max_batch])
-        expected_feature_length = original_length//2
-        return x_list, expected_feature_length
-
-    def unchunk(self, feat_list, expected_feature_length):
-        # feat_list [[B, T, C]]
+    def unchunk(self, feat_list, original_shape, window_size=750, hop_size=375):
+        # feat_list : list of [B, C, T]
+        residual = window_size - hop_size
         result = None
         B, C, _ = feat_list[0].size()
+        mask = (torch.arange(residual) / residual).to(feat_list[0].device).unsqueeze(0)
+        mask = torch.tile(mask, (C, 1))
         for feat in feat_list:
             for b in range(feat.size()[0]):
                 if result is None:
                     result = feat[b]
                 else:
-                    result = torch.cat([result, feat[b]], dim=0)
-        return result[:expected_feature_length]
-    
+                    result[:, -residual:] = (
+                        result[:, -residual:] * (1 - mask) + feat[b][:, :residual] * mask
+                    )
+                    result = torch.cat([result, feat[b][:, residual:]], dim=-1)
+        return result[:, :original_shape]    
 
     def inference(self, x):
         # x: [C, T]
@@ -197,7 +207,41 @@ class AudioEncoder(nn.Module):
         x_list, original_length = self.chunk(x)
         for x_temp in x_list:
             output = self.forward(x_temp)
-            output_list.append(output)
+            output_list.append(output.permute(0,2,1))
         result = self.unchunk(output_list, original_length)
         return result 
 
+
+
+if __name__ == '__main__':
+
+    gpu = 0
+    device = f"cuda:{gpu}"
+    def count_parameters(model):
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+    # load model
+    ckpt_file = "/nas/public/model/whisper/large-v2-encoder.pt"
+    checkpoint = torch.load(ckpt_file, map_location=device)
+    dims = ModelDimensions(**checkpoint["dims"])
+
+    model = AudioEncoder(dims.n_mels, dims.n_audio_ctx, dims.n_audio_state, dims.n_audio_head, dims.n_audio_layer)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.cuda(gpu)
+    model.eval()
+
+    print(count_parameters(model))
+
+    mel = torch.randn(80, 5000).cuda(gpu)
+
+    import time 
+    start = time.time()
+    with torch.no_grad():
+        for i in range(10):
+            output = model.inference(mel)
+
+    print(time.time()-start)
+
+    print(mel.shape)
+    print(output.shape)
